@@ -260,6 +260,7 @@ namespace OppoControl
             Connected?.Invoke(null, EventArgs.Empty);
 
             Client = new TcpClient(Address.ToString(), Port);
+            SetVerbosityMode(3);
         }
 
         private void StatusUpdateWorkFunc()
@@ -339,9 +340,9 @@ namespace OppoControl
         public string Name { get; set; }
         public ushort Port { get; set; }
         public IPAddress Address { get; set; }
-        private Thread TelnetRecvThread { get; set; }
-        private Thread ProcessStatusThread { get; set; }
-        private Thread KeepRemotePortOpenThread { get; set; }
+        private Thread TelnetRecvThread { get; }
+        private Thread ProcessStatusThread { get; }
+        private Thread KeepRemotePortOpenThread { get; }
         private TcpClient? Client { get; set; }
         public bool IsConnected => Client is not null && Client.Connected;
 

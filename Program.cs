@@ -115,7 +115,6 @@ namespace OppoTelnet
             Console.WriteLine("Scan files");
             unit.Connect();
 
-            unit.SetVerbosityMode(3);
             Console.WriteLine("listening for plex");
             var plexListenerThread = new Thread(() =>
             {
