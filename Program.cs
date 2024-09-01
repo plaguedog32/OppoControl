@@ -7,35 +7,14 @@ using OppoControl;
 
 namespace OppoTelnet
 {
-    public class ConfigurationData
-    {
-        public string HTP1Ip { get; set; }
-        public ShareRoot[] ShareRoots { get; set; }
-        public string PlexWebhookPort { get; set; }
-        public string PlexDBPath { get; set; }
-        public string PlexDeviceInputRemoteCode { get; set; }
-        public string OppoInputRemoteCode { get; set; }
-    }
-
-    public class ShareRoot
-    {
-        public string Root { get; set; }
-        public string PlexBDMVLibraryRoot { get; set; }
-        public string PlexBDMVLibraryName { get; set; }
-        public string OppoBDMVShareRoot { get; set; }
-        public string QualityTag { get; set; }
-    }
-
     internal class Program
     {
         private static HttpListener plexListener = new();
         private static Queue<string> PlexJsonQueue = new();
-        private static ConfigurationData Data;
+        private static readonly ConfigurationData _config = ConfigurationData.LoadData() ?? throw new Exception("Failed to load config data");
 
         static void Main(string[] args)
         {
-            Data = JsonSerializer.Deserialize<ConfigurationData>(File.ReadAllText("Configuration.json"));
-
             var unit = new OppoUnit();
             unit.StatusEventHandler += (_, e) =>
             {
@@ -43,14 +22,19 @@ namespace OppoTelnet
                 {
                     Console.WriteLine("Oppo Stopped Playback, switching input to Plex Device");
                     var myHttpClient = new HttpClient();
-                    var result = myHttpClient.GetAsync($"http://{Data.HTP1Ip}/ircmd?code={Data.PlexDeviceInputRemoteCode}").Result;
+                    var result = myHttpClient.GetAsync($"http://{_config.HTP1Ip}/ircmd?code={_config.PlexDeviceInputRemoteCode}").Result;
                 }
                 else if (e.Message == "@@UPL PLAY")
                 {
                     Console.WriteLine("Oppo Started Playback, switching input to Oppo");
                     var myHttpClient = new HttpClient();
-                    var result = myHttpClient.GetAsync($"http://{Data.HTP1Ip}/ircmd?code={Data.OppoInputRemoteCode}").Result;
+                    var result = myHttpClient.GetAsync($"http://{_config.HTP1Ip}/ircmd?code={_config.OppoInputRemoteCode}").Result;
                 }
+            };
+            unit.Disconnected += (_, _) =>
+            {
+                Console.WriteLine("Oppo disconnected from telnet");
+                unit.Connect();
             };
 
             var bdmvFolders = new Dictionary<string, Dictionary<string, DirectoryInfo>>();
@@ -61,7 +45,7 @@ namespace OppoTelnet
             {
                 searching = true;
                 bdmvFolders.Clear();
-                foreach (var share in Data.ShareRoots)
+                foreach (var share in _config.ShareRoots)
                 {
                     var library = new Dictionary<string, DirectoryInfo>();
                     bdmvFolders.Add(share.PlexBDMVLibraryName, library);
@@ -135,9 +119,17 @@ namespace OppoTelnet
             Console.WriteLine("listening for plex");
             var plexListenerThread = new Thread(() =>
             {
-                plexListener.Prefixes.Add($"http://*:{Data.PlexWebhookPort}/");
+                plexListener.Prefixes.Add($"http://*:{_config.PlexWebhookPort}/");
 
-                plexListener.Start();
+                try
+                {
+                    plexListener.Start();
+                }
+                catch
+                {
+                    Console.Error.WriteLine("Must run as admin");
+                    throw;
+                }
 
                 while (true)
                 {
@@ -179,56 +171,54 @@ namespace OppoTelnet
 
             plexListenerThread.Start();
 
-            var connection = new SQLiteConnection($"Data Source={Data.PlexDBPath};Read Only=True;");
+            var connection = new SQLiteConnection($"Data Source={_config.PlexDBPath};Read Only=True;");
             connection.Open();
 
             while (true)
             {
-                if (searching)
+                if (searching || PlexJsonQueue.Count <= 0)
                 {
                     Thread.Sleep(1);
                     continue;
                 }
 
-                if (PlexJsonQueue.Count > 0)
+                var json = PlexJsonQueue.Dequeue();
+                var data = JsonSerializer.Deserialize<Rootobject>(json);
+
+                if (data.Event != "media.play" || !unit.IsConnected)
                 {
-                    var json = PlexJsonQueue.Dequeue();
-
-                    var data = JsonSerializer.Deserialize<Rootobject>(json);
-
-                    if (data.Event == "media.play" && unit.IsConnected)
-                    {
-                        foreach (var share in Data.ShareRoots)
-                        {
-                            if (data.Player.local && data.Metadata.librarySectionTitle == share.PlexBDMVLibraryName)
-                            {
-                                var library = bdmvFolders[share.PlexBDMVLibraryName];
-                                var getFilePath = $"SELECT b.file FROM media_items a INNER JOIN media_parts b ON a.id=b.media_item_id WHERE a.metadata_item_id={data.Metadata.key.Split("/").Last()}";
-
-                                var command = connection.CreateCommand();
-                                command.CommandText = getFilePath;
-                                var reader = command.ExecuteReader();
-
-                                if (reader.Read())
-                                {
-                                    var filePathResult = reader.GetString(0);
-                                    var fileName = Path.GetFileName(filePathResult).Replace(".mp4", string.Empty);
-                                    if (library.ContainsKey(fileName))
-                                    {
-                                        var bdmvFolder = library[fileName];
-                                        unit.PlayBDMVFolder($"{share.OppoBDMVShareRoot}/{bdmvFolder.FullName.Substring(share.Root.Length + 1).Replace(@"\", "/")}");
-
-                                        Console.WriteLine($"Playing {data.Metadata.title}");
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    continue;
                 }
-                else
+
+                foreach (var share in _config.ShareRoots)
                 {
-                    Thread.Sleep(1);
+                    if (!data.Player.local || data.Metadata.librarySectionTitle != share.PlexBDMVLibraryName)
+                    {
+                        continue;
+                    }
+
+                    var library = bdmvFolders[share.PlexBDMVLibraryName];
+                    var getFilePath = $"SELECT b.file FROM media_items a INNER JOIN media_parts b ON a.id=b.media_item_id WHERE a.metadata_item_id={data.Metadata.key.Split("/").Last()}";
+
+                    var command = connection.CreateCommand();
+                    command.CommandText = getFilePath;
+                    var reader = command.ExecuteReader();
+
+                    if (!reader.Read())
+                    {
+                        continue;
+                    }
+
+                    var filePathResult = reader.GetString(0);
+                    var fileName = Path.GetFileName(filePathResult).Replace(".mp4", string.Empty);
+                    if (library.ContainsKey(fileName))
+                    {
+                        var bdmvFolder = library[fileName];
+                        unit.PlayBDMVFolder($"{share.OppoBDMVShareRoot}/{bdmvFolder.FullName.Substring(share.Root.Length + 1).Replace(@"\", "/")}");
+
+                        Console.WriteLine($"Playing {data.Metadata.title}");
+                        break;
+                    }
                 }
             }
         }

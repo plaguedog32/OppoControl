@@ -155,23 +155,21 @@ namespace OppoControl
         public EventHandler<OppoStatusEvent> StatusEventHandler { get; set; }
 
         public EventHandler Connected { get; set; }
-
-        public bool IsConnected { get; set; } = false;
+        public EventHandler Disconnected { get; set; }
 
         public OppoUnit()
         {
+            TelnetRecvThread = new Thread(TelnetRecvWorkFunc);
+            TelnetRecvThread.Start();
+            ProcessStatusThread = new Thread(StatusUpdateWorkFunc);
+            ProcessStatusThread.Start();
+            KeepRemotePortOpenThread = new Thread(KeepRemotePortOpenWorkFunc);
+            KeepRemotePortOpenThread.Start();
         }
 
         public void Connect()
         {
             WaitForOppo();
-
-            ConnectionThread = new Thread(RecvThread);
-            ConnectionThread.Start();
-            ProcessStatusThread = new Thread(StatusThread);
-            ProcessStatusThread.Start();
-            KeepRemotePortOpenThread = new Thread(KeepRemotePortOpen);
-            KeepRemotePortOpenThread.Start();
         }
 
         private IPAddress GetLocalIPAddress()
@@ -187,11 +185,12 @@ namespace OppoControl
             throw new Exception("No network adapters with an IPv4 address in the system!");
         }
 
-        private void KeepRemotePortOpen()
+        private void KeepRemotePortOpenWorkFunc()
         {
             int PORT = 7624;
             UdpClient udpClient = new UdpClient();
-            udpClient.Client.Bind(new IPEndPoint(GetLocalIPAddress(), PORT));
+            var localIP = GetLocalIPAddress();
+            udpClient.Client.Bind(new IPEndPoint(localIP, PORT));
             var msg = "NOTIFY OREMOTE LOGIN";
             var lastSend = DateTime.MinValue;
             var msgRecieved = false;
@@ -201,11 +200,12 @@ namespace OppoControl
                 if (udpClient.Available > 0)
                 {
                     var recvBuffer = udpClient.Receive(ref from);
-                    var recvMsg = Encoding.ASCII.GetString(recvBuffer);
-                    if (from.Address.ToString() == "10.254.254.20")
+                    if (from.Address.ToString() == localIP.ToString())
                     {
                         continue;
                     }
+
+                    var recvMsg = Encoding.ASCII.GetString(recvBuffer);
 
                     if (recvMsg.StartsWith("Notify:OPPO Player Start"))
                     {
@@ -229,7 +229,6 @@ namespace OppoControl
 
         private void WaitForOppo()
         {
-            IsConnected = false;
             Socket sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             EndPoint ep = new IPEndPoint(IPAddress.Any, 7624);
             sock.Bind(ep);
@@ -259,19 +258,17 @@ namespace OppoControl
             }
             sock.Close();
             Connected?.Invoke(null, EventArgs.Empty);
-            IsConnected = true;
 
             Client = new TcpClient(Address.ToString(), Port);
-
         }
 
-        private void StatusThread()
+        private void StatusUpdateWorkFunc()
         {
             while (!_shutdown)
             {
-                if (StatusMessages.Count > 0)
+                if (_statusMessages.Count > 0)
                 {
-                    StatusEventHandler?.Invoke(null, new OppoStatusEvent{Message = StatusMessages.Dequeue()});
+                    StatusEventHandler?.Invoke(null, new OppoStatusEvent{Message = _statusMessages.Dequeue()});
                 }
                 else
                 {
@@ -280,7 +277,7 @@ namespace OppoControl
             }
         }
 
-        private void RecvThread(object? obj)
+        private void TelnetRecvWorkFunc(object? obj)
         {
             var lastCheck = DateTime.Now;
             var buffer = new byte[4096];
@@ -289,6 +286,12 @@ namespace OppoControl
             {
                 try
                 {
+                    if (Client is null)
+                    {
+                        Thread.Sleep(1);
+                        continue;
+                    }
+
                     if (!Client.Connected)
                     {
                         throw new Exception();
@@ -304,11 +307,11 @@ namespace OppoControl
                                 var str = Encoding.ASCII.GetString(buffer, 0, index);
                                 if (str.StartsWith("@@"))
                                 {
-                                    StatusMessages.Enqueue(str.Trim());
+                                    _statusMessages.Enqueue(str.Trim());
                                 }
                                 else
                                 {
-                                    CommandResponseMessages.Enqueue(str);
+                                    _commandResponseMessages.Enqueue(str);
                                 }
                                 index = 0;
                             }
@@ -327,7 +330,8 @@ namespace OppoControl
                 }
                 catch (Exception e)
                 {
-                    WaitForOppo();
+                    Client = null;
+                    Disconnected?.Invoke(null, EventArgs.Empty);
                 }
             }
         }
@@ -335,13 +339,15 @@ namespace OppoControl
         public string Name { get; set; }
         public ushort Port { get; set; }
         public IPAddress Address { get; set; }
-        private Thread ConnectionThread { get; set; }
+        private Thread TelnetRecvThread { get; set; }
         private Thread ProcessStatusThread { get; set; }
         private Thread KeepRemotePortOpenThread { get; set; }
-        private TcpClient Client { get; set; }
-        private bool _shutdown = false;
-        private Queue<string> CommandResponseMessages = new();
-        private Queue<string> StatusMessages = new();
+        private TcpClient? Client { get; set; }
+        public bool IsConnected => Client is not null && Client.Connected;
+
+        private bool _shutdown;
+        private readonly Queue<string> _commandResponseMessages = new();
+        private readonly Queue<string> _statusMessages = new();
 
         private void SendCommand(string command)
         {
@@ -356,11 +362,11 @@ namespace OppoControl
 
         private string WaitForResponse()
         {
-            while (CommandResponseMessages.Count == 0)
+            while (_commandResponseMessages.Count == 0)
             {
                 Thread.Sleep(1);
             }
-            return CommandResponseMessages.Dequeue();
+            return _commandResponseMessages.Dequeue();
         }
 
         public (string Type, string Value) QueryDirectoryItem(int i)
