@@ -1,0 +1,24 @@
+{
+  "HTP1Ip": "10.254.254.84",
+  "ShareRoots": [
+    {
+      "Root": "\\\\10.254.254.4\\e$\\DISC_BACKUP\\UHD",
+      "PlexBDMVLibraryRoot": "\\\\10.254.254.4\\e$\\Media\\4K Movie Night",
+      "PlexBDMVLibraryName": "4K Blu-Ray Discs",
+      "OppoBDMVShareRoot": "/mnt/sda1/Video/UHD",
+      "QualityTag": "[UHD]"
+    },
+    {
+      "Root": "\\\\10.254.254.4\\e$\\DISC_BACKUP\\HD",
+      "PlexBDMVLibraryRoot": "\\\\10.254.254.4\\e$\\Media\\Blu-Ray Discs",
+      "PlexBDMVLibraryName": "Blu-Ray Discs",
+      "OppoBDMVShareRoot": "/mnt/sda1/Video/HD",
+      "QualityTag": "[HD]"
+    }
+  ],
+
+  "PlexWebhookPort": "8001",
+  "PlexDBPath": "C:\\Users\\jjoyce\\Downloads\\DB.Browser.for.SQLite-v3.13.0-win64\\com.plexapp.plugins.library.db",
+  "PlexDeviceInputRemoteCode": "0ff0",
+  "OppoInputRemoteCode": "10ef"
+}
