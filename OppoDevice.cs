@@ -213,7 +213,7 @@ namespace OppoControl
                     }
 
                     msgRecieved = true;
-                    Debugger.Log(0, null, recvMsg + "\n");
+                    Console.WriteLine("Remote port keep alive response");
                 }
 
                 if (DateTime.Now < lastSend + TimeSpan.FromSeconds(msgRecieved ? 60*10 : 1))
@@ -232,7 +232,7 @@ namespace OppoControl
             Socket sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             EndPoint ep = new IPEndPoint(IPAddress.Any, 7624);
             sock.Bind(ep);
-            Console.WriteLine("Waiting For Oppo...");
+            Console.WriteLine("Waiting For Oppo to send broadcast message...");
 
             while (true)
             {
